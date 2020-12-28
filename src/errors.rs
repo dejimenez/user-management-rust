@@ -11,6 +11,9 @@ pub enum ServiceError {
 
     #[display(fmt = "JWKSFetchError")]
     JWKSFetchError,
+
+     #[display(fmt = "Forbidden")]
+    Forbidden,
 }
 
 // impl ResponseError trait allows to convert our errors into http responses with appropriate data
@@ -23,6 +26,9 @@ impl ResponseError for ServiceError {
             ServiceError::BadRequest(ref message) => HttpResponse::BadRequest().json(message),
             ServiceError::JWKSFetchError => {
                 HttpResponse::InternalServerError().json("Could not fetch JWKS")
+            }
+            ServiceError::Forbidden => {
+                HttpResponse::Forbidden().json("User or password incorrect")
             }
         }
     }
