@@ -1,18 +1,29 @@
 use super::models::{NewUser, User};
 use super::schema::users::dsl::*;
 use super::Pool;
+use super::errors::ServiceError;
 use crate::diesel::QueryDsl;
 use crate::diesel::RunQueryDsl;
 use actix_web::{web, Error, HttpResponse};
 use diesel::dsl::{delete, insert_into};
+use diesel::ExpressionMethods;
 use serde::{Deserialize, Serialize};
 use std::vec::Vec;
+
+use bcrypt::{hash, verify, DEFAULT_COST};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InputUser {
     pub first_name: String,
     pub last_name: String,
     pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoginDto {
+    pub email: String,
+    pub password: String,
 }
 
 // Handler for GET /users
@@ -47,6 +58,17 @@ pub async fn add_user(
         .map_err(|_| HttpResponse::InternalServerError())?)
 }
 
+// Handler for POST /users
+pub async fn login(
+    db: web::Data<Pool>,
+    login_info: web::Json<LoginDto>,
+) -> Result<HttpResponse, Error> {
+    Ok(web::block(move || check_user(db, login_info))
+        .await
+        .map(|token| HttpResponse::Ok().json(token))
+        .map_err(|_| HttpResponse::InternalServerError())?)
+}
+
 // Handler for DELETE /users/{id}
 pub async fn delete_user(
     db: web::Data<Pool>,
@@ -71,6 +93,21 @@ fn db_get_user_by_id(pool: web::Data<Pool>, user_id: i32) -> Result<User, diesel
     users.find(user_id).get_result::<User>(&conn)
 }
 
+fn check_user(pool: web::Data<Pool>, login_info: web::Json<LoginDto>) 
+    -> Result<super::jwt::AuthResp, ServiceError> {
+    let conn = pool.get().unwrap();
+    let user_result = users.filter(email.eq(&login_info.email)).get_result::<User>(&conn);
+    match user_result {
+        Ok(user) => {
+            if verify(&login_info.password, &user.password).unwrap() {
+                return Ok(super::jwt::create_jwt(&user));
+            } 
+            Err(ServiceError::Forbidden)
+        }
+        Err(_) => Err(ServiceError::Forbidden)
+    }
+}
+
 fn add_single_user(
     db: web::Data<Pool>,
     item: web::Json<InputUser>,
@@ -80,6 +117,7 @@ fn add_single_user(
         first_name: &item.first_name,
         last_name: &item.last_name,
         email: &item.email,
+        password: &hash(&item.password, DEFAULT_COST).unwrap(),
         created_at: chrono::Local::now().naive_local(),
     };
     let res = insert_into(users).values(&new_user).get_result(&conn)?;
